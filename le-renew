@@ -1,0 +1,46 @@
+#!/bin/sh
+
+# Main configuration
+CONFIG_DIR="/etc/letsencrypt/renewal"
+EXP_LIMIT=30;
+SERVER_RELOAD_CMD="service nginx reload"
+LE_PATH='/opt/letsencrypt'
+LE_PARAMS='--no-self-upgrade'
+
+if [ ! -d $CONFIG_DIR ]; then
+        echo "[ERROR] config dir does not exist: $CONFIG_DIR"
+        exit 1;
+fi
+
+need_reload=0;
+for CONFIG_FILE in `ls $CONFIG_DIR/*.conf`; do
+        echo Processing $CONFIG_FILE;
+        domain=`grep "^\s*domains" $CONFIG_FILE | sed "s/^\s*domains\s*=\s*//" | sed 's/(\s*)\|,.*$//'`
+        webroot_path=`grep "^\s*webroot_path" $CONFIG_FILE | sed "s/^\s*webroot_path\s*=\s*//" | sed 's/(\s*)\|,.*$//'`
+        cert_file="/etc/letsencrypt/live/$domain/fullchain.pem"
+
+        if [ ! -f $cert_file ]; then
+                echo "[ERROR] certificate file not found for domain $domain."
+        fi
+
+        exp=$(date -d "`openssl x509 -in $cert_file -text -noout|grep "Not After"|cut -c 25-`" +%s)
+        datenow=$(date -d "now" +%s)
+        days_exp=$(echo \( $exp - $datenow \) / 86400 |bc)
+
+        echo "Checking expiration date for $domain..."
+        if [ "$days_exp" -gt "$EXP_LIMIT" ] ; then
+                echo "The certificate is up to date, no need for renewal ($days_exp days left)."
+        else
+                echo "The certificate for $domain is about to expire soon. Starting webroot renewal script..."
+                need_reload=1
+                $LE_PATH/letsencrypt-auto certonly $LE_PARAMS -a webroot --webroot-path=$webroot_path -d $domain --agree-tos --renew-by-default
+        fi
+        echo ""
+done
+
+if [ "$need_reload" -eq "1" ]; then
+        echo "Reloading Web server"
+        $SERVER_RELOAD_CMD
+fi
+
+echo "Done"
